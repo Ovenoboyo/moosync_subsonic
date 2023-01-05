@@ -4,7 +4,7 @@ This extension provides the following features for Sobsonic compatible servers
 - All songs (In form of a playlist)
 - Starred songs
 - Playlists
-- Search songs, albums, artists and playlists
+- Search songs, albums and artists
 
 ## Creating the extension
 
