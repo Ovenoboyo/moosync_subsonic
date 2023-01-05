@@ -109,8 +109,6 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
     search: SearchParams<T>,
     xml = true
   ): Promise<SubsonicResponse<T> | undefined> {
-    console.log(this.serverURL, this.#username, this.#password)
-
     if (!this.serverURL || !this.#username || !this.#password) {
       return undefined
     }
