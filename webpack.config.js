@@ -14,7 +14,7 @@ module.exports = {
         libraryExport: 'default',
     },
     resolve: {
-        extensions: ['.ts', '.js'] //resolve all the modules other than index.ts
+        extensions: ['.ts', '.js'], //resolve all the modules other than index.ts
     },
     module: {
         rules: [
@@ -23,5 +23,5 @@ module.exports = {
                 test: /\.ts?$/
             }
         ]
-    },
+    }
 }

@@ -1,119 +1,386 @@
-import { MoosyncExtensionTemplate, Playlist, PlayerState, Song, SongQueue, Artists } from '@moosync/moosync-types'
+import { Album, Artists, MoosyncExtensionTemplate, Playlist, SearchReturnType, Song } from '@moosync/moosync-types'
+import crypto from 'crypto'
+import { XMLParser } from 'fast-xml-parser'
 import { resolve } from 'path'
+import { fetch } from './utils'
 
-const sampleSong: Song = {
-  _id: 'Another random ID',
-  title: 'Example song',
-  duration: 0,
-  date_added: Date.now(),
-  type: 'URL',
-  playbackUrl:
-    'https://file-examples.com/storage/fe8788b10b62489539afcfd/2017/11/file_example_MP3_5MG.mp3' /* If the URL is directly playable, duration is fetched at runtime */
-}
+export class SubsonicExtension implements MoosyncExtensionTemplate {
+  private _serverURL: string | undefined = undefined
+  #username: string | undefined = undefined
+  #password: string | undefined = undefined
 
-const samplePlaylist: Playlist = {
-  playlist_id: 'Some random generated ID',
-  playlist_name: 'Hello this is a playlist',
-  playlist_song_count: 69,
-  playlist_coverPath: 'https://avatars.githubusercontent.com/u/91860733?s=200&v=4',
-  icon: resolve(__dirname, '../assets/icon.svg')
-}
-
-const sampleArtist: Artists = {
-  artist_id: 'random generated ID',
-  artist_name: 'My Artist',
-  artist_coverPath: 'https://avatars.githubusercontent.com/u/91860733?s=200&v=4'
-}
-export class MyExtension implements MoosyncExtensionTemplate {
-  private interval: ReturnType<typeof setInterval> | undefined
+  private get serverURL() {
+    if (this._serverURL) {
+      return this._serverURL?.at(-1) === '/'
+        ? this._serverURL.substring(0, this._serverURL.length - 1)
+        : this._serverURL
+    }
+  }
 
   async onStarted() {
-    console.info('Extension started')
-    this.registerEvents()
-
-    this.interval = setInterval(() => {
-      this.setProgressbarWidth()
-    }, 1000)
-
-    api.setContextMenuItem({
-      type: 'SONGS',
-      label: 'Test context menu item',
-      handler: (songs) => {
-        console.info('Clicked context menu item with data', songs)
-      }
-    })
+    await this.fetchInitialValues()
+    this.registerListeners()
   }
 
-  private async onSongChanged(song: Song) {
-    console.debug(song)
+  private async fetchInitialValues() {
+    this._serverURL = (await api.getPreferences('server_address')) ?? 'http://localhost:4533'
+    this.#username = await api.getPreferences('username')
+    this.#password = await api.getSecure('password')
   }
 
-  private async onPlayerStateChanged(state: PlayerState) {
-    console.debug(state)
-  }
-
-  private async onSongQueueChanged(queue: SongQueue) {
-    console.debug(queue.index)
-  }
-
-  private async onVolumeChanged(volume: number) {
-    console.debug(volume)
-  }
-
-  async onStopped() {
-    // Cleanup intervals, timeout, etc in onStopped
-    if (this.interval) {
-      clearInterval(this.interval)
-    }
-
-    console.info('Extension stopped')
-  }
-
-  private async onPreferenceChanged({ key, value }: { key: string; value: any }): Promise<void> {
-    console.info('Preferences changed at', key, 'with value', value)
-  }
-
-  async setProgressbarWidth() {
-    await api.setPreferences('test_progressBar', Math.random() * 100 + 1)
-  }
-
-  private async registerEvents() {
+  private registerListeners() {
     api.on('requestedPlaylists', async () => {
       return {
-        playlists: [samplePlaylist]
+        playlists: (await this.getAllPlaylists()) ?? []
       }
     })
 
-    api.on('requestedPlaylistSongs', async () => {
+    api.on('requestedPlaylistSongs', async (playlistId) => {
       return {
-        songs: [sampleSong]
+        songs: (await this.getPlaylistSongs(playlistId)) ?? []
       }
-    })
-
-    api.on('requestedLyrics', async (song) => {
-      return 'Lorem Ipsum'
     })
 
     api.on('requestedSearchResult', async (term) => {
+      return this.search(term)
+    })
+
+    api.on('requestedRecommendations', async () => {
       return {
-        songs: [sampleSong],
-        playlists: [samplePlaylist],
-        artists: [sampleArtist],
-        albums: []
+        songs: (await this.getRecommendations()) ?? []
       }
     })
 
-    api.on('playerStateChanged', this.onPlayerStateChanged.bind(this))
-    api.on('preferenceChanged', this.onPreferenceChanged.bind(this))
-    api.on('volumeChanged', this.onVolumeChanged.bind(this))
-    api.on('songChanged', this.onSongChanged.bind(this))
-    api.on('songQueueChanged', this.onSongQueueChanged.bind(this))
-    api.on('seeked', async (time) => console.debug('Player seeked to', time))
-
-    await api.registerOAuth('exampleOAuth') /* Callback paths are case-insensitive */
-
-    api.on('oauthCallback', async (url) => {
-      console.info('OAuth callback triggered', url)
+    api.on('requestedArtistSongs', async (artist) => {
+      const artistId = artist?.artist_extra_info?.extensions?.[api.utils.packageName]?.['subsonic_artist_id']
+      if (artistId) {
+        return {
+          songs: (await this.getArtistSongs(artistId)) ?? []
+        }
+      }
     })
+
+    api.on('requestedAlbumSongs', async (album) => {
+      const albumId = album?.album_extra_info?.extensions?.[api.utils.packageName]?.['subsonic_album_id']
+      if (albumId) {
+        return {
+          songs: (await this.getAlbumSongs(albumId)) ?? []
+        }
+      }
+    })
+
+    api.on('preferenceChanged', async ({ key, value }) => {
+      if (key === 'server_address') {
+        this._serverURL = value.toString()
+      } else if (key === 'username') {
+        this.#username = value.toString()
+      } else if (key === 'password') {
+        this.#password = value.toString()
+      }
+    })
+  }
+
+  generateParameters() {
+    const salt = crypto.randomBytes(32).toString('hex')
+    const computedToken = crypto
+      .createHash('md5')
+      .update(this.#password + salt)
+      .digest('hex')
+
+    return `u=${this.#username}&t=${computedToken}&s=${salt}&v=1.16.1&c=moosync`
+  }
+
+  formulateUrl<T extends SupportedMethods>(method: T, search: SearchParams<T>) {
+    let parsedSearch = ''
+    if (search) {
+      for (const [key, value] of Object.entries(search)) {
+        if (parsedSearch.length > 0) {
+          parsedSearch += '&'
+        }
+        parsedSearch += `${key}=${value}`
+      }
+    }
+
+    return `${this.serverURL}/rest/${method}?${this.generateParameters()}&${parsedSearch}`
+  }
+
+  private async populateRequest<T extends SupportedMethods>(
+    method: T,
+    search: SearchParams<T>,
+    xml = true
+  ): Promise<SubsonicResponse<T> | undefined> {
+    console.log(this.serverURL, this.#username, this.#password)
+
+    if (!this.serverURL || !this.#username || !this.#password) {
+      return undefined
+    }
+
+    try {
+      const resp = await fetch(this.formulateUrl(method, search))
+
+      if (xml) {
+        const ret = new XMLParser({
+          attributeNamePrefix: '',
+          ignoreDeclaration: true,
+          ignoreAttributes: false
+        }).parse(resp)?.['subsonic-response']
+
+        if ((ret as GenericResp)?.status !== 'ok') {
+          console.error('Error in method', method, (ret as GenericResp)?.error)
+          return undefined
+        }
+        return ret
+      } else {
+        return resp as unknown as SubsonicResponse<T>
+      }
+    } catch (e) {
+      console.error(e)
+      return undefined
+    }
+  }
+
+  async search(query: string): Promise<SearchReturnType> {
+    const resp = await this.populateRequest('search3', { query })
+    if (resp) {
+      return {
+        songs: this.parseSong(this.checkArray(resp.searchResult3.song)),
+        playlists: this.parsePlaylist(this.checkArray(resp.searchResult3.playlist)),
+        albums: this.parseAlbums(this.checkArray(resp.searchResult3.album)),
+        artists: this.parseArtists(this.checkArray(resp.searchResult3.artist))
+      }
+    }
+  }
+
+  private parseAlbums(albumList: AlbumResp[]): Album[] {
+    const ret: Album[] = []
+    for (const a of albumList) {
+      ret.push({
+        album_name: a.album,
+        album_id: a.id,
+        album_coverPath_high: a.coverArt && this.formulateUrl('getCoverArt', { id: a.coverArt, size: 800 }),
+        album_coverPath_low: a.coverArt && this.formulateUrl('getCoverArt', { id: a.coverArt, size: 80 }),
+        album_extra_info: {
+          extensions: {
+            [api.utils.packageName]: {
+              subsonic_album_id: a.id
+            }
+          }
+        }
+      })
+    }
+
+    return ret
+  }
+
+  private parseArtists(artistList: ArtistResp[]): Artists[] {
+    const ret: Artists[] = []
+    for (const a of artistList) {
+      ret.push({
+        artist_id: a.id,
+        artist_name: a.name,
+        artist_extra_info: {
+          extensions: {
+            [api.utils.packageName]: {
+              subsonic_artist_id: a.id
+            }
+          }
+        }
+      })
+    }
+
+    return ret
+  }
+
+  private parseSong(songList: SongResp[], albumCover?: string) {
+    const ret: Song[] = []
+
+    for (const s of songList) {
+      ret.push({
+        _id: s.id,
+        title: s.title,
+        song_coverPath_high: this.formulateUrl('getCoverArt', { id: s.coverArt, size: 800 }),
+        song_coverPath_low: this.formulateUrl('getCoverArt', { id: s.coverArt, size: 80 }),
+        album: {
+          album_name: s.album,
+          album_id: s.albumId,
+          album_coverPath_high: albumCover && this.formulateUrl('getCoverArt', { id: albumCover, size: 800 }),
+          album_coverPath_low: albumCover && this.formulateUrl('getCoverArt', { id: albumCover, size: 80 }),
+          album_extra_info: {
+            extensions: {
+              [api.utils.packageName]: {
+                subsonic_album_id: s.albumId
+              }
+            }
+          }
+        },
+        artists: [
+          {
+            artist_id: s.artistId,
+            artist_name: s.artist,
+            artist_extra_info: {
+              extensions: {
+                [api.utils.packageName]: {
+                  subsonic_artist_id: s.artistId
+                }
+              }
+            }
+          }
+        ],
+        duration: parseInt(s.duration ?? '0'),
+        playbackUrl: this.formulateUrl('stream', { id: s.id }),
+        date_added: new Date(s.created).getTime(),
+        type: 'URL'
+      })
+    }
+
+    return ret
+  }
+
+  async getAllSongs() {
+    const songList: Song[] = []
+    const indexResp = await this.populateRequest('getIndexes', undefined)
+    if (indexResp) {
+      const artists = indexResp.indexes.index.map((val) => this.checkArray(val.artist)).flat(2)
+
+      for (const artist of artists) {
+        const resp = await this.populateRequest('getArtist', {
+          id: artist.id
+        })
+
+        if (resp) {
+          resp.artist.album = this.checkArray(resp.artist.album)
+
+          const albums = resp.artist.album
+
+          for (const album of albums) {
+            const resp = await this.populateRequest('getAlbum', {
+              id: album.id
+            })
+
+            if (resp) {
+              resp.album.song = this.checkArray(resp.album.song)
+
+              songList.push(...this.parseSong(resp.album.song, album.coverArt))
+            }
+          }
+        }
+      }
+    }
+
+    return songList
+  }
+
+  private parsePlaylist(playlists: PlaylistsResp['playlists']['playlist']) {
+    const ret: Playlist[] = []
+    for (const p of playlists) {
+      ret.push({
+        playlist_id: p.id,
+        playlist_name: p.name
+      })
+    }
+
+    return ret
+  }
+
+  async getPlaylistSongs(id: string) {
+    if (id === 'subsonic_starred') {
+      return this.getStarred()
+    }
+
+    if (id === 'all_songs') {
+      return this.getAllSongs()
+    }
+
+    const resp = await this.populateRequest('getPlaylist', {
+      id
+    })
+
+    if (resp) {
+      resp.playlist.entry = this.checkArray(resp.playlist.entry)
+      return this.parseSong(resp.playlist.entry)
+    }
+  }
+
+  async getStarred() {
+    const resp = await this.populateRequest('getStarred', undefined)
+    if (resp) {
+      resp.starred.song = this.checkArray(resp.starred.song)
+      return this.parseSong(resp.starred.song)
+    }
+  }
+
+  async getAllPlaylists() {
+    const resp = await this.populateRequest('getPlaylists', undefined)
+    if (resp) {
+      resp.playlists.playlist = this.checkArray(resp.playlists.playlist)
+
+      const starredPlaylist: Playlist = {
+        playlist_id: 'subsonic_starred',
+        playlist_name: 'Starred',
+        playlist_coverPath: resolve(__dirname, '../assets/starred_playlist.png')
+      }
+
+      const allSongs: Playlist = {
+        playlist_id: 'all_songs',
+        playlist_name: 'All Songs',
+        playlist_coverPath: resolve(__dirname, '../assets/all_songs_playlist.png')
+      }
+
+      return [...this.parsePlaylist(resp.playlists.playlist), starredPlaylist, allSongs]
+    }
+  }
+
+  async getRecommendations() {
+    const resp = await this.populateRequest('getRandomSongs', { size: 50 })
+    const similar: Song[] = []
+
+    if (resp) {
+      for (const s of this.checkArray(resp.randomSongs.song)) {
+        const recom = await this.populateRequest('getSimilarSongs', {
+          id: s.id
+        })
+
+        if (recom) {
+          similar.push(...this.parseSong(this.checkArray(recom.similarSongs.song)))
+        }
+
+        if (similar.length >= 75) {
+          break
+        }
+      }
+
+      return similar
+    }
+  }
+
+  async getAlbumSongs(id: string) {
+    const resp = await this.populateRequest('getAlbum', { id })
+    if (resp) {
+      return this.parseSong(this.checkArray(resp.album.song))
+    }
+  }
+
+  async getArtistSongs(id: string) {
+    const ret: Song[] = []
+    const artistResp = await this.populateRequest('getArtist', { id })
+    if (artistResp) {
+      const albums = this.checkArray(artistResp.artist.album).map((val) => val.id)
+      for (const a of albums) {
+        ret.push(...(await this.getAlbumSongs(a)))
+      }
+    }
+
+    return ret
+  }
+
+  private checkArray<T>(elem?: T | T[]): T[] {
+    if (elem) {
+      if (!Array.isArray(elem)) {
+        return [elem]
+      } else {
+        return elem
+      }
+    }
+    return []
   }
 }
