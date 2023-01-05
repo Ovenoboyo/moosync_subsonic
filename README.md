@@ -1,6 +1,6 @@
 # Soundcloud integration for Moosync
 
-This extension provides the following features for Sobsonic compatible servers
+This extension provides the following features for Subsonic compatible servers
 - All songs (In form of a playlist)
 - Starred songs
 - Playlists
