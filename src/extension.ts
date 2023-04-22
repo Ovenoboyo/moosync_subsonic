@@ -5,9 +5,9 @@ import { resolve } from 'path'
 import { fetch } from './utils'
 
 export class SubsonicExtension implements MoosyncExtensionTemplate {
-  private _serverURL: string | undefined = 'https://music.picafe.me'
-  #username: string | undefined = 'picafe'
-  #password: string | undefined = 'ne7sO2JIV*%A!36W'
+  private _serverURL: string | undefined = undefined
+  #username: string | undefined = undefined
+  #password: string | undefined = undefined
 
   private get serverURL() {
     if (this._serverURL) {
