@@ -17,6 +17,8 @@ type SupportedMethods =
   | 'stream'
   | 'getRandomSongs'
   | 'getSimilarSongs'
+  | 'getArtists'
+  | 'getAlbumList'
 
 interface GenericResp {
   xmlns: string
@@ -98,6 +100,13 @@ interface SongResp {
   type: string
   isVideo: boolean
 }
+
+interface AlbumListResp extends GenericResp {
+  albumList: {
+    album: AlbumResp[]
+  }
+}
+
 interface AlbumsResp extends GenericResp {
   album: AlbumResp & {
     song?: SongResp[]
@@ -178,34 +187,48 @@ type SubsonicResponse<T extends SupportedMethods> = T extends 'getMusicFolders'
   ? RandomSongResp
   : T extends 'getSimilarSongs'
   ? SimilarSongResp
+  : T extends 'getAlbumList'
+  ? AlbumListResp
   : undefined
+
+
 
 type SearchParams<T extends SupportedMethods> = T extends 'search3'
   ? {
-      query: string
-      artistCount?: number
-      artistOffset?: number
-      albumCount?: number
-      albumOffset?: number
-      songCount?: number
-      songOffset?: number
-      musicFolderId?: string
-    }
+    query: string
+    artistCount?: number
+    artistOffset?: number
+    albumCount?: number
+    albumOffset?: number
+    songCount?: number
+    songOffset?: number
+    musicFolderId?: string
+  }
   : T extends 'getMusicDirectory' | 'getArtist' | 'getAlbum' | 'getPlaylist' | 'stream' | 'getSimilarSongs'
   ? {
-      id: string
-    }
+    id: string
+  }
   : T extends 'getCoverArt'
   ? {
-      id: string
-      size?: number
-    }
+    id: string
+    size?: number
+  }
   : T extends 'getRandomSongs'
   ? {
-      size?: number
-    }
+    size?: number
+  }
+  : T extends 'getAlbumList'
+  ? {
+    type: 'alphabeticalByName',
+    size: number
+  }
   : undefined
 
 interface LoginResponse {
   'subsonic-response': {}
+}
+
+interface NextPageToken {
+  limit: number
+  offset: number
 }

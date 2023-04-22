@@ -35,10 +35,8 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
       }
     })
 
-    api.on('requestedPlaylistSongs', async (playlistId) => {
-      return {
-        songs: (await this.getPlaylistSongs(playlistId)) ?? []
-      }
+    api.on('requestedPlaylistSongs', (playlistId, _, nextPageToken: NextPageToken) => {
+      return this.getPlaylistSongs(playlistId, nextPageToken)
     })
 
     api.on('requestedSearchResult', async (term) => {
@@ -115,7 +113,6 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
 
     try {
       const resp = await fetch(this.formulateUrl(method, search))
-
       if (xml) {
         const ret = new XMLParser({
           attributeNamePrefix: '',
@@ -137,8 +134,8 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
     }
   }
 
-  async search(query: string): Promise<SearchReturnType> {
-    const resp = await this.populateRequest('search3', { query })
+  async search(query: string, songCount = 20, songOffset = 0): Promise<SearchReturnType> {
+    const resp = await this.populateRequest('search3', { query, songCount, songOffset })
     if (resp) {
       return {
         songs: this.parseSong(this.checkArray(resp.searchResult3.song)),
@@ -234,38 +231,13 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
     return ret
   }
 
-  async getAllSongs() {
-    const songList: Song[] = []
-    const indexResp = await this.populateRequest('getIndexes', undefined)
-    if (indexResp) {
-      const artists = indexResp.indexes.index.map((val) => this.checkArray(val.artist)).flat(2)
-
-      for (const artist of artists) {
-        const resp = await this.populateRequest('getArtist', {
-          id: artist.id
-        })
-
-        if (resp) {
-          resp.artist.album = this.checkArray(resp.artist.album)
-
-          const albums = resp.artist.album
-
-          for (const album of albums) {
-            const resp = await this.populateRequest('getAlbum', {
-              id: album.id
-            })
-
-            if (resp) {
-              resp.album.song = this.checkArray(resp.album.song)
-
-              songList.push(...this.parseSong(resp.album.song, album.coverArt))
-            }
-          }
-        }
-      }
-    }
-
-    return songList
+  async getAllSongs(nextPageToken?: NextPageToken) {
+    const resp = await this.search('""', 500, nextPageToken?.offset)
+    return {
+      songs: resp.songs, nextPageToken: {
+        limit: 500,
+        offset: (nextPageToken?.offset ?? 0) + 500
+    }}
   }
 
   private parsePlaylist(playlists: PlaylistsResp['playlists']['playlist']) {
@@ -280,13 +252,13 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
     return ret
   }
 
-  async getPlaylistSongs(id: string) {
+  async getPlaylistSongs(id: string, nextPageToken?: NextPageToken): Promise<{songs: Song[], nextPageToken?: NextPageToken}> {
     if (id === 'subsonic_starred') {
-      return this.getStarred()
+      return {songs: await this.getStarred()}
     }
 
     if (id === 'all_songs') {
-      return this.getAllSongs()
+      return this.getAllSongs(nextPageToken)
     }
 
     const resp = await this.populateRequest('getPlaylist', {
@@ -295,7 +267,7 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
 
     if (resp) {
       resp.playlist.entry = this.checkArray(resp.playlist.entry)
-      return this.parseSong(resp.playlist.entry)
+      return {songs: this.parseSong(resp.playlist.entry)}
     }
   }
 
@@ -310,7 +282,12 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
   async getAllPlaylists() {
     const resp = await this.populateRequest('getPlaylists', undefined)
     if (resp) {
-      resp.playlists.playlist = this.checkArray(resp.playlists.playlist)
+
+      const parsedPlaylists: Playlist[] = []
+      if (typeof resp.playlists === 'object') {
+        resp.playlists.playlist = this.checkArray(resp.playlists.playlist)
+        parsedPlaylists.push(...this.parsePlaylist(resp.playlists.playlist))
+      }
 
       const starredPlaylist: Playlist = {
         playlist_id: 'subsonic_starred',
@@ -318,13 +295,14 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
         playlist_coverPath: resolve(__dirname, '../assets/starred_playlist.png')
       }
 
+
       const allSongs: Playlist = {
         playlist_id: 'all_songs',
         playlist_name: 'All Songs',
         playlist_coverPath: resolve(__dirname, '../assets/all_songs_playlist.png')
       }
 
-      return [...this.parsePlaylist(resp.playlists.playlist), starredPlaylist, allSongs]
+      return [...parsedPlaylists, starredPlaylist, allSongs]
     }
   }
 
