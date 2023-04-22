@@ -35,6 +35,13 @@ class MyExtensionFactory implements ExtensionFactory {
         description: 'Password for your subsonic compatible server',
         inputType: 'password',
         key: 'password'
+      },  
+      {
+        type: 'InfoField',
+        default: '',
+        title: '',
+        description: '',
+        key: 'server_status'
       }
     ]
   }

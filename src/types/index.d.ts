@@ -19,6 +19,7 @@ type SupportedMethods =
   | 'getSimilarSongs'
   | 'getArtists'
   | 'getAlbumList'
+  | 'ping'
 
 interface GenericResp {
   xmlns: string
@@ -189,7 +190,7 @@ type SubsonicResponse<T extends SupportedMethods> = T extends 'getMusicFolders'
   ? SimilarSongResp
   : T extends 'getAlbumList'
   ? AlbumListResp
-  : undefined
+  : GenericResp
 
 
 

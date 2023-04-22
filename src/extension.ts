@@ -5,9 +5,9 @@ import { resolve } from 'path'
 import { fetch } from './utils'
 
 export class SubsonicExtension implements MoosyncExtensionTemplate {
-  private _serverURL: string | undefined = undefined
-  #username: string | undefined = undefined
-  #password: string | undefined = undefined
+  private _serverURL: string | undefined = 'https://music.picafe.me'
+  #username: string | undefined = 'picafe'
+  #password: string | undefined = 'ne7sO2JIV*%A!36W'
 
   private get serverURL() {
     if (this._serverURL) {
@@ -20,6 +20,7 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
   async onStarted() {
     await this.fetchInitialValues()
     this.registerListeners()
+    this.setServerInfo()
   }
 
   private async fetchInitialValues() {
@@ -75,7 +76,33 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
       } else if (key === 'password') {
         this.#password = value.toString()
       }
+
+      await this.setServerInfo()
+
     })
+  }
+
+  async setServerInfo() {
+    try {
+      const ping = await this.ping()
+
+      await api.setPreferences('server_status', `
+      Server URL: ${this.serverURL}
+      Status: Connected
+      Server Version: ${ping.serverVersion}
+      Server Type: ${ping.type}`)
+    } catch (e) {
+      console.log(e)
+      await api.setPreferences('server_status', `
+      Server URL: ${this.serverURL}
+      Status: Failed to connect
+      Reason: ${e?.message}
+      Code: ${e?.code}`)
+    }
+  }
+
+  async ping() {
+    return await this.populateRequest('ping', undefined, true, true)
   }
 
   generateParameters() {
@@ -105,7 +132,8 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
   private async populateRequest<T extends SupportedMethods>(
     method: T,
     search: SearchParams<T>,
-    xml = true
+    xml = true,
+    throwOnError = false
   ): Promise<SubsonicResponse<T> | undefined> {
     if (!this.serverURL || !this.#username || !this.#password) {
       return undefined
@@ -121,6 +149,9 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
         }).parse(resp)?.['subsonic-response']
 
         if ((ret as GenericResp)?.status !== 'ok') {
+          if (throwOnError) {
+            throw ret.error
+          }
           console.error('Error in method', method, (ret as GenericResp)?.error)
           return undefined
         }
@@ -129,6 +160,9 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
         return resp as unknown as SubsonicResponse<T>
       }
     } catch (e) {
+      if (throwOnError) {
+        throw e
+      }
       console.error(e)
       return undefined
     }
@@ -237,7 +271,8 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
       songs: resp.songs, nextPageToken: {
         limit: 500,
         offset: (nextPageToken?.offset ?? 0) + 500
-    }}
+      }
+    }
   }
 
   private parsePlaylist(playlists: PlaylistsResp['playlists']['playlist']) {
@@ -252,9 +287,9 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
     return ret
   }
 
-  async getPlaylistSongs(id: string, nextPageToken?: NextPageToken): Promise<{songs: Song[], nextPageToken?: NextPageToken}> {
+  async getPlaylistSongs(id: string, nextPageToken?: NextPageToken): Promise<{ songs: Song[], nextPageToken?: NextPageToken }> {
     if (id === 'subsonic_starred') {
-      return {songs: await this.getStarred()}
+      return { songs: await this.getStarred() }
     }
 
     if (id === 'all_songs') {
@@ -267,7 +302,7 @@ export class SubsonicExtension implements MoosyncExtensionTemplate {
 
     if (resp) {
       resp.playlist.entry = this.checkArray(resp.playlist.entry)
-      return {songs: this.parseSong(resp.playlist.entry)}
+      return { songs: this.parseSong(resp.playlist.entry) }
     }
   }
 
